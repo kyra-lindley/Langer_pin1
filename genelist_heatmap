@@ -1,0 +1,910 @@
+---
+title: "final_genelist_heatmap_zscore_overlap_file"
+output: html_document
+date: "2025-05-19"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(readxl)
+library(dplyr)
+library(writexl)
+library(GSEABase)
+
+# === Load sig_genes ===
+sig_genes_df <- read_xlsx("/Users/lindleyk/Langer/Bulk/deseq/psc_scr_tgfb_vs_un/sig_genes_filtered.xlsx")
+
+# === Load cytokines ===
+cytokines <- read_xlsx("/Users/lindleyk/Langer/Bulk/secreted_ligands.xlsx")$Ligand
+
+# === ECM gene list ===
+ecm_genes <- c("FN1", "FBN1", "TNC", "TGFB1", "FGB", "POSTN", "FGA", "FGG", "LAMB2", "LAMA5", "NID1", "THBS1", "LAMC1",
+               "EMILIN1", "PXDN", "ECM1", "ELN", "LAMB3", "LAMB1", "IGFBP7", "FBLN2", "LAMC4", "DPT", "EFEMP1", "LTBP4", 
+               "VWA5A", "THSD4", "IGFBP3", "LAMC2", "MFAP2", "LTBP2", "CYR61", "MFAP5", "GAS6", "EMILIN2", "LAMA2", 
+               "THBS2", "FBLN5", "HMCN1", "CTGF", "VWF", "TINAGL1", "VWA1", "PAPLN", "EMID2", "SND1", "LTBP3", "AGRN", 
+               "SRPX", "EFEMP2", "MFGE8", "COL1A1", "COL1A2", "COL3A1", "COL5A1", "COL5A2", "COL6A1", "COL6A2", "COL6A3", 
+               "COL12A1", "COL14A1", "COL15A1", "COL16A1", "COL18A1", "COL22A1", "COL6A5", "COL24A1", "COL27A1", 
+               "COL28A1", "COL21A1", "COL20A1", "COL26A1", "COL25A1", "COL6A4", "COL4A1", "COL4A2", "COL4A4", 
+               "COL4A5", "COL4A6", "COL6A6", "HSPG2", "BGN", "DCN", "ASPN", "LUM", "PRELP", "OGN", "PRG4", "ANXA1", 
+               "ANXA2", "ANXA3", "ANXA5", "ANXA6", "ANXA11", "LGALS1", "LGALS3", "LGALS3BP", "LGALS7", "LMNA", 
+               "S100A4", "S100A6", "S100A10", "S100A11", "S100A13", "S100A16", "C1QA", "C1QB", "C1QC", "HCFC1", 
+               "WNT16", "CRLF3", "FLG2", "S100A2", "S100A8", "ANGPTL4", "IL6", "HCFC2", "S100A10", "TGM2", "PLG", 
+               "PLOD1", "SERPINF1", "F2", "PLAU", "P4HA1", "P4HA2", "P4HA3", "ADAMTSL1", "ADAMTSL2", "MMP3", 
+               "MMP14", "LEPRE1", "LOX", "SERPINB1", "SERPINC1", "BMP1", "CTSD", "SERPING1", "CSTB", "KNG1", 
+               "MMP1", "MMP12", "TIMP3", "PLAT", "F10", "EGLN1", "F13B", "SERPINE2", "LOXL2", "CTSC", "ADAM10", 
+               "TIMP1", "HABP2", "SERPINA1", "P4HTM", "ADAM9", "HTRA1", "CTSF", "LEPREL2", "CST3")
+
+# === Load NABA_MATRISOME from GMT file ===
+gmt_file <- "/Users/lindleyk/Desktop/NABA_MATRISOME.v2024.1.Hs.gmt"
+gene_sets <- getGmt(gmt_file)
+gene_sets_list <- geneIds(gene_sets)
+naba_genes <- gene_sets_list[["NABA_MATRISOME"]]
+
+# === Define helper function for overlap + DEG direction ===
+get_overlap_info <- function(gene_list, sig_df, label) {
+  sig_df %>%
+    filter(symbol %in% gene_list) %>%
+    mutate(DEG_direction = case_when(
+      log2FoldChange > 0 ~ "Upregulated",
+      log2FoldChange < 0 ~ "Downregulated",
+      TRUE ~ "Unchanged"
+    ))
+}
+
+# === Perform overlaps ===
+cytokine_overlap <- get_overlap_info(cytokines, sig_genes_df, "Cytokines")
+ecm_overlap      <- get_overlap_info(ecm_genes, sig_genes_df, "ECM")
+naba_overlap     <- get_overlap_info(naba_genes, sig_genes_df, "NABA_MATRISOME")
+
+# === Save all results to Excel ===
+write_xlsx(
+  list(
+    Cytokine_Overlap = cytokine_overlap,
+    ECM_Overlap = ecm_overlap,
+    NABA_MATRISOME_Overlap = naba_overlap
+  ),
+  "/Users/lindleyk/Desktop/naba_ecm_cytokine_overlaps.xlsx"
+)
+
+```
+
+```{r}
+library(readxl)
+
+# Load each sheet as its own data frame
+overlap_file <- "/Users/lindleyk/Desktop/naba_ecm_cytokine_overlaps.xlsx"
+cytokines_df <- read_xlsx(overlap_file, sheet = "Cytokine_Overlap")
+ecm_df       <- read_xlsx(overlap_file, sheet = "ECM_Overlap")
+naba_df      <- read_xlsx(overlap_file, sheet = "NABA_MATRISOME_Overlap")
+
+```
+
+```{r}
+library(DESeq2)
+
+# Load rlog matrix and results
+rld <- readRDS("/Users/lindleyk/Langer/Bulk/deseq/psc_scr_tgfb_vs_un/rlog_psc_scr_tgfb_vs_un.rds")
+res <- readRDS("/Users/lindleyk/Langer/Bulk/deseq/psc_scr_tgfb_vs_un/res_psc_scr_tgfb_vs_un.rds")
+
+rld_mat <- assay(rld)  # matrix: genes x samples
+
+# Convert res to data frame with gene symbols
+res_df <- as.data.frame(res) %>%
+  rownames_to_column("ensembl") %>%
+  mutate(ensembl_clean = gsub("\\..*", "", ensembl))
+
+```
+
+
+```{r, cytokines}
+library(readxl)
+library(DESeq2)
+library(pheatmap)
+library(dplyr)
+library(tidyr)
+library(writexl)
+library(ggplot2)
+library(org.Hs.eg.db)
+library(AnnotationDbi)
+
+# === Load data ===
+cytokines_df <- read_xlsx("/Users/lindleyk/Desktop/naba_ecm_cytokine_overlaps.xlsx", sheet = "Cytokine_Overlap")
+rld <- readRDS("/Users/lindleyk/Langer/Bulk/deseq/psc_scr_tgfb_vs_un/rlog_psc_scr_tgfb_vs_un.rds")
+res <- readRDS("/Users/lindleyk/Langer/Bulk/deseq/psc_scr_tgfb_vs_un/res_psc_scr_tgfb_vs_un.rds")
+
+rld_mat <- assay(rld)
+
+# === Map Ensembl IDs to gene symbols ===
+ensembl_ids <- gsub("\\..*", "", rownames(rld_mat))
+gene_symbols <- mapIds(org.Hs.eg.db,
+                       keys = ensembl_ids,
+                       column = "SYMBOL",
+                       keytype = "ENSEMBL",
+                       multiVals = "first")
+rownames(rld_mat) <- gene_symbols
+rld_mat <- rld_mat[!is.na(rownames(rld_mat)), ]
+
+# === Subset and z-score cytokine genes ===
+genes_cytokine <- unique(cytokines_df$symbol)
+rld_cytokine <- rld_mat[rownames(rld_mat) %in% genes_cytokine, ]
+z_cytokine <- t(scale(t(rld_cytokine)))
+
+# === Rename samples: "shSCR UN 1" format ===
+old_names <- colnames(z_cytokine)
+new_names <- old_names
+new_names <- gsub("^PSCSCRU(\\d+)", "shSCR UN \\1", new_names)
+new_names <- gsub("^PSCSCRT(\\d+)", "shSCR TGFB \\1", new_names)
+new_names <- gsub("^PSCPINU(\\d+)", "shPIN1 UN \\1", new_names)
+new_names <- gsub("^PSCPINT(\\d+)", "shPIN1 TGFB \\1", new_names)
+colnames(z_cytokine) <- new_names
+
+# === Reorder samples: by group, then numeric suffix ===
+group <- gsub(" \\d+$", "", new_names)
+replicate <- as.integer(gsub("^.* (\\d+)$", "\\1", new_names))
+order_df <- data.frame(
+  sample = new_names,
+  group = factor(group, levels = c("shSCR UN", "shSCR TGFB", "shPIN1 UN", "shPIN1 TGFB")),
+  rep = replicate
+)
+order_df <- arrange(order_df, group, rep)
+sample_order <- order_df$sample
+z_cytokine <- z_cytokine[, sample_order]
+
+# === Define annotation + colors ===
+annotation_col <- data.frame(Group = order_df$group)
+rownames(annotation_col) <- sample_order
+ann_colors <- list(Group = c(
+  "shSCR UN" = "grey",
+  "shSCR TGFB" = "black",
+  "shPIN1 UN" = "red",
+  "shPIN1 TGFB" = "pink"
+))
+
+# === Heatmap ===
+pheatmap(z_cytokine,
+         cluster_rows = TRUE,
+         cluster_cols = FALSE,
+         show_colnames = TRUE,
+         annotation_col = annotation_col,
+         annotation_colors = ann_colors,
+         main = "Cytokine Genes Z-score: shSCR TGFB vs UN")
+
+# === Get DEG info for cytokine genes ===
+res_df <- as.data.frame(res) %>%
+  rownames_to_column("ensembl") %>%
+  mutate(ensembl_clean = gsub("\\..*", "", ensembl)) %>%
+  mutate(symbol = mapIds(org.Hs.eg.db,
+                         keys = ensembl_clean,
+                         column = "SYMBOL",
+                         keytype = "ENSEMBL",
+                         multiVals = "first"))
+
+# Filter for cytokine genes and assign DEG direction
+deg_cytokine <- res_df %>%
+  filter(symbol %in% genes_cytokine) %>%
+  mutate(DEG_status = case_when(
+    log2FoldChange > 0 ~ "Upregulated",
+    log2FoldChange < 0 ~ "Downregulated",
+    TRUE ~ "Unchanged"
+  )) %>%
+  select(symbol, log2FoldChange, padj, DEG_status)
+# === Join z-score matrix with DEG info ===
+gene_info <- deg_cytokine[, c("symbol", "log2FoldChange")]
+heat_df <- as.data.frame(z_cytokine)
+heat_df$symbol <- rownames(z_cytokine)
+heat_df_joined <- inner_join(heat_df, gene_info, by = "symbol")
+
+# === Split into up/downregulated gene z-scores ===
+heat_up <- heat_df_joined %>% filter(log2FoldChange > 0) %>% select(-log2FoldChange)
+heat_down <- heat_df_joined %>% filter(log2FoldChange < 0) %>% select(-log2FoldChange)
+
+# === Recalculate z-score matrices for each (row-wise z-score already applied, so optional here) ===
+z_up <- as.matrix(heat_up[, -which(names(heat_up) == "symbol")])
+z_down <- as.matrix(heat_down[, -which(names(heat_down) == "symbol")])
+
+# === Prepare cumulative z-score summary ===
+zscore_summary <- data.frame(
+  Sample = rep(colnames(z_up), 2),
+  Zscore = c(colMeans(z_up, na.rm = TRUE), colMeans(z_down, na.rm = TRUE)),
+  Direction = rep(c("Cytokine-up", "Cytokine-down"), each = ncol(z_up))
+)
+
+# === Order sample levels ===
+zscore_summary$Sample <- factor(zscore_summary$Sample, levels = sample_order)
+
+# === Annotate treatment group based on sample name ===
+zscore_summary$Treatment <- gsub(" \\d+", "", as.character(zscore_summary$Sample))
+# Reorder samples manually
+zscore_summary$Sample <- factor(zscore_summary$Sample, levels = c(
+  paste0("shSCR UN ", 1:5),
+  paste0("shSCR TGFB ", 1:5),
+  paste0("shPIN1 UN ", 1:5),
+  paste0("shPIN1 TGFB ", 1:5)
+))
+ggplot(zscore_summary, aes(x = Sample, y = Zscore, fill = Direction)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  theme_minimal() +
+  labs(title = "Cumulative Z-Score of Cytokine Genes (shSCR TGFB vs shSCR UN)",
+       y = "Average Z-Score", x = NULL) +
+  scale_fill_manual(values = c("Cytokine-up" = "firebrick", "Cytokine-down" = "steelblue")) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        strip.text = element_text(face = "bold"))
+
+write_xlsx(zscore_summary, path = "/Users/lindleyk/Desktop/shSCR_tgfb_vs_un_final_cytokine_overlap.xlsx")
+
+```
+
+```{r, ecm}
+library(readxl)
+library(DESeq2)
+library(pheatmap)
+library(dplyr)
+library(tidyr)
+library(writexl)
+library(ggplot2)
+library(org.Hs.eg.db)
+library(AnnotationDbi)
+
+# === Load ECM gene list ===
+ecm_df <- read_xlsx("/Users/lindleyk/Desktop/naba_ecm_cytokine_overlaps.xlsx", sheet = "ECM_Overlap")
+genes_ecm <- unique(ecm_df$symbol)
+
+# === Load DESeq2 objects ===
+rld <- readRDS("/Users/lindleyk/Langer/Bulk/deseq/psc_scr_tgfb_vs_un/rlog_psc_scr_tgfb_vs_un.rds")
+res <- readRDS("/Users/lindleyk/Langer/Bulk/deseq/psc_scr_tgfb_vs_un/res_psc_scr_tgfb_vs_un.rds")
+rld_mat <- assay(rld)
+
+# === Map Ensembl IDs to gene symbols ===
+ensembl_ids <- gsub("\\..*", "", rownames(rld_mat))
+gene_symbols <- mapIds(org.Hs.eg.db,
+                       keys = ensembl_ids,
+                       column = "SYMBOL",
+                       keytype = "ENSEMBL",
+                       multiVals = "first")
+rownames(rld_mat) <- gene_symbols
+rld_mat <- rld_mat[!is.na(rownames(rld_mat)), ]
+
+# === Subset and z-score ECM genes ===
+rld_ecm <- rld_mat[rownames(rld_mat) %in% genes_ecm, ]
+z_ecm <- t(scale(t(rld_ecm)))
+
+# === Rename samples: "shSCR UN 1" format ===
+old_names <- colnames(z_ecm)
+new_names <- old_names
+new_names <- gsub("^PSCSCRU(\\d+)", "shSCR UN \\1", new_names)
+new_names <- gsub("^PSCSCRT(\\d+)", "shSCR TGFB \\1", new_names)
+new_names <- gsub("^PSCPINU(\\d+)", "shPIN1 UN \\1", new_names)
+new_names <- gsub("^PSCPINT(\\d+)", "shPIN1 TGFB \\1", new_names)
+colnames(z_ecm) <- new_names
+
+# === Reorder samples ===
+group <- gsub(" \\d+$", "", new_names)
+replicate <- as.integer(gsub("^.* (\\d+)$", "\\1", new_names))
+order_df <- data.frame(
+  sample = new_names,
+  group = factor(group, levels = c("shSCR UN", "shSCR TGFB", "shPIN1 UN", "shPIN1 TGFB")),
+  rep = replicate
+)
+order_df <- arrange(order_df, group, rep)
+sample_order <- order_df$sample
+z_ecm <- z_ecm[, sample_order]
+
+# === Annotations for heatmap ===
+annotation_col <- data.frame(Group = order_df$group)
+rownames(annotation_col) <- sample_order
+ann_colors <- list(Group = c(
+  "shSCR UN" = "grey",
+  "shSCR TGFB" = "black",
+  "shPIN1 UN" = "red",
+  "shPIN1 TGFB" = "pink"
+))
+
+# === Heatmap ===
+pheatmap(z_ecm,
+         cluster_rows = TRUE,
+         cluster_cols = FALSE,
+         show_colnames = TRUE,
+         annotation_col = annotation_col,
+         annotation_colors = ann_colors,
+         main = "ECM Genes Z-score: shSCR TGFB vs UN")
+
+# === DEG Status for ECM genes ===
+res_df <- as.data.frame(res) %>%
+  rownames_to_column("ensembl") %>%
+  mutate(ensembl_clean = gsub("\\..*", "", ensembl)) %>%
+  mutate(symbol = mapIds(org.Hs.eg.db,
+                         keys = ensembl_clean,
+                         column = "SYMBOL",
+                         keytype = "ENSEMBL",
+                         multiVals = "first"))
+deg_ecm <- res_df %>%
+  filter(symbol %in% genes_ecm) %>%
+  mutate(DEG_status = case_when(
+    log2FoldChange > 0 ~ "Upregulated",
+    log2FoldChange < 0 ~ "Downregulated",
+    TRUE ~ "Unchanged"
+  )) %>%
+  select(symbol, log2FoldChange, padj, DEG_status)
+
+# === Cumulative Z-score: Up vs Down ===
+gene_info <- deg_ecm[, c("symbol", "log2FoldChange")]
+heat_df <- as.data.frame(z_ecm)
+heat_df$symbol <- rownames(z_ecm)
+heat_df_joined <- inner_join(heat_df, gene_info, by = "symbol")
+
+heat_up <- heat_df_joined %>% filter(log2FoldChange > 0) %>% select(-log2FoldChange)
+heat_down <- heat_df_joined %>% filter(log2FoldChange < 0) %>% select(-log2FoldChange)
+
+z_up <- as.matrix(heat_up[, -which(names(heat_up) == "symbol")])
+z_down <- as.matrix(heat_down[, -which(names(heat_down) == "symbol")])
+
+zscore_summary <- data.frame(
+  Sample = rep(colnames(z_up), 2),
+  Zscore = c(colMeans(z_up, na.rm = TRUE), colMeans(z_down, na.rm = TRUE)),
+  Direction = rep(c("ECM-up", "ECM-down"), each = ncol(z_up))
+)
+
+# Order sample factor levels
+zscore_summary$Sample <- factor(zscore_summary$Sample, levels = c(
+  paste0("shSCR UN ", 1:5),
+  paste0("shSCR TGFB ", 1:5),
+  paste0("shPIN1 UN ", 1:5),
+  paste0("shPIN1 TGFB ", 1:5)
+))
+zscore_summary$Treatment <- gsub(" \\d+", "", as.character(zscore_summary$Sample))
+
+# === Barplot ===
+ggplot(zscore_summary, aes(x = Sample, y = Zscore, fill = Direction)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  theme_minimal() +
+  labs(title = "Cumulative Z-Score of ECM Genes: shSCR TGFB vs shSCR UN ",
+       y = "Average Z-Score", x = NULL) +
+  scale_fill_manual(values = c("ECM-up" = "firebrick", "ECM-down" = "steelblue")) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+
+write_xlsx(zscore_summary, path = "/Users/lindleyk/Desktop/shSCR_tgfb_vs_un_final_ecm_overlap.xlsx")
+```
+
+```{r, matrisome}
+library(DESeq2)
+library(dplyr)
+library(pheatmap)
+library(tibble)
+library(readxl)
+library(writexl)
+library(org.Hs.eg.db)
+library(ggplot2)
+
+# === Load rlog and DESeq2 result objects ===
+rld <- readRDS("/Users/lindleyk/Langer/Bulk/deseq/psc_scr_tgfb_vs_un/rlog_psc_scr_tgfb_vs_un.rds")
+res <- readRDS("/Users/lindleyk/Langer/Bulk/deseq/psc_scr_tgfb_vs_un/res_psc_scr_tgfb_vs_un.rds")
+rld_mat <- assay(rld)
+
+# === Map Ensembl IDs to gene symbols ===
+ensembl_ids <- gsub("\\..*", "", rownames(rld_mat))
+gene_symbols <- mapIds(org.Hs.eg.db,
+                       keys = ensembl_ids,
+                       column = "SYMBOL",
+                       keytype = "ENSEMBL",
+                       multiVals = "first")
+rownames(rld_mat) <- gene_symbols
+rld_mat <- rld_mat[!is.na(rownames(rld_mat)), ]
+
+# === Load Matrisome gene list from Excel ===
+matrisome_df <- read_xlsx("/Users/lindleyk/Desktop/naba_ecm_cytokine_overlaps.xlsx",
+                           sheet = "NABA_MATRISOME_Overlap")
+genes_matrisome <- unique(matrisome_df$symbol)
+
+# === Subset and z-score ===
+rld_matrisome <- rld_mat[rownames(rld_mat) %in% genes_matrisome, ]
+z_matrisome <- t(scale(t(rld_matrisome)))
+
+# === Rename samples ===
+old_names <- colnames(z_matrisome)
+new_names <- old_names
+new_names <- gsub("^PSCSCRU(\\d+)", "shSCR UN \\1", new_names)
+new_names <- gsub("^PSCSCRT(\\d+)", "shSCR TGFB \\1", new_names)
+new_names <- gsub("^PSCPINU(\\d+)", "shPIN1 UN \\1", new_names)
+new_names <- gsub("^PSCPINT(\\d+)", "shPIN1 TGFB \\1", new_names)
+colnames(z_matrisome) <- new_names
+
+# === Reorder samples ===
+group <- gsub(" \\d+$", "", new_names)
+replicate <- as.integer(gsub("^.* (\\d+)$", "\\1", new_names))
+order_df <- data.frame(
+  sample = new_names,
+  group = factor(group, levels = c("shSCR UN", "shSCR TGFB", "shPIN1 UN", "shPIN1 TGFB")),
+  rep = replicate
+)
+order_df <- arrange(order_df, group, rep)
+sample_order <- order_df$sample
+z_matrisome <- z_matrisome[, sample_order]
+
+# === Define annotation + colors ===
+annotation_col <- data.frame(Group = order_df$group)
+rownames(annotation_col) <- sample_order
+ann_colors <- list(Group = c(
+  "shSCR UN" = "grey",
+  "shSCR TGFB" = "black",
+  "shPIN1 UN" = "red",
+  "shPIN1 TGFB" = "pink"
+))
+
+# === Heatmap ===
+pheatmap(z_matrisome,
+         cluster_rows = TRUE,
+         cluster_cols = FALSE,
+         show_colnames = TRUE,
+         show_rownames = FALSE,
+         annotation_col = annotation_col,
+         annotation_colors = ann_colors,
+         main = "Matrisome Genes Z-score: shSCR TGFB vs UN")
+
+# === DEG info ===
+res_df <- as.data.frame(res) %>%
+  rownames_to_column("ensembl") %>%
+  mutate(ensembl_clean = gsub("\\..*", "", ensembl)) %>%
+  mutate(symbol = mapIds(org.Hs.eg.db,
+                         keys = ensembl_clean,
+                         column = "SYMBOL",
+                         keytype = "ENSEMBL",
+                         multiVals = "first"))
+
+deg_matrisome <- res_df %>%
+  filter(symbol %in% genes_matrisome) %>%
+  mutate(DEG_status = case_when(
+    log2FoldChange > 0 ~ "Upregulated",
+    log2FoldChange < 0 ~ "Downregulated",
+    TRUE ~ "Unchanged"
+  )) %>%
+  select(symbol, log2FoldChange, padj, DEG_status)
+
+# === Join with Z matrix ===
+gene_info <- deg_matrisome[, c("symbol", "log2FoldChange")]
+heat_df <- as.data.frame(z_matrisome)
+heat_df$symbol <- rownames(z_matrisome)
+heat_df_joined <- inner_join(heat_df, gene_info, by = "symbol")
+
+heat_up <- heat_df_joined %>% filter(log2FoldChange > 0) %>% select(-log2FoldChange)
+heat_down <- heat_df_joined %>% filter(log2FoldChange < 0) %>% select(-log2FoldChange)
+
+z_up <- as.matrix(heat_up[, -which(names(heat_up) == "symbol")])
+z_down <- as.matrix(heat_down[, -which(names(heat_down) == "symbol")])
+
+# === Cumulative Z-score summary ===
+zscore_summary <- data.frame(
+  Sample = rep(colnames(z_up), 2),
+  Zscore = c(colMeans(z_up, na.rm = TRUE), colMeans(z_down, na.rm = TRUE)),
+  Direction = rep(c("Matrisome-up", "Matrisome-down"), each = ncol(z_up))
+)
+
+zscore_summary$Sample <- factor(zscore_summary$Sample, levels = sample_order)
+zscore_summary$Treatment <- gsub(" \\d+", "", as.character(zscore_summary$Sample))
+
+# === Bar plot ===
+ggplot(zscore_summary, aes(x = Sample, y = Zscore, fill = Direction)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  theme_minimal() +
+  labs(title = "Cumulative Z-Score of Matrisome Genes (shSCR TGFB vs UN)",
+       y = "Average Z-Score", x = NULL) +
+  scale_fill_manual(values = c("Matrisome-up" = "firebrick", "Matrisome-down" = "steelblue")) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        strip.text = element_text(face = "bold"))
+
+# === Export ===
+write_xlsx(zscore_summary, path = "/Users/lindleyk/Desktop/shSCR_tgfb_vs_un_final_matrisome_overlap.xlsx")
+
+```
+
+### Inhibitor Data
+```{r, load data}
+# === Load Libraries ===
+library(DESeq2)
+library(dplyr)
+library(tibble)
+library(org.Hs.eg.db)
+library(pheatmap)
+library(ggplot2)
+library(writexl)
+library(GSEABase)
+
+# === Load DESeq2 Results and rlog ===
+dds <- readRDS("/Users/lindleyk/Langer/Bulk/deseq/inhibitors/dds_inhibitors.rds")
+res <- readRDS("/Users/lindleyk/Langer/Bulk/deseq/inhibitors/res_inhibitors.rds")
+rld <- readRDS("/Users/lindleyk/Langer/Bulk/deseq/inhibitors/rlog_inhibitors.rds")
+rld_mat <- assay(rld)
+
+# === Clean DESeq2 results and map gene symbols ===
+res_df <- as.data.frame(res) %>%
+  rownames_to_column("ensembl") %>%
+  mutate(ensembl_clean = gsub("\\..*", "", ensembl)) %>%
+  mutate(symbol = mapIds(org.Hs.eg.db,
+                         keys = ensembl_clean,
+                         column = "SYMBOL",
+                         keytype = "ENSEMBL",
+                         multiVals = "first")) %>%
+  filter(!is.na(symbol), padj < 0.05)
+
+```
+
+```{r, cytokine}
+# === Load libraries ===
+library(DESeq2)
+library(GSEABase)
+library(dplyr)
+library(org.Hs.eg.db)
+library(pheatmap)
+library(ggplot2)
+library(writexl)
+library(readxl)
+library(tibble)
+
+# === Load DESeq2 objects ===
+dds <- readRDS("/Users/lindleyk/Langer/Bulk/deseq/inhibitors/dds_inhibitors.rds")
+res <- readRDS("/Users/lindleyk/Langer/Bulk/deseq/inhibitors/res_inhibitors.rds")
+rld <- readRDS("/Users/lindleyk/Langer/Bulk/deseq/inhibitors/rlog_inhibitors.rds")
+
+# === Load cytokine gene list from Excel ===
+cytokines_df <- read_xlsx("/Users/lindleyk/Desktop/naba_ecm_cytokine_overlaps.xlsx", sheet = "Cytokine_Overlap")
+genes_cytokine <- unique(cytokines_df$symbol)
+
+# === Process DESeq2 results: map gene symbols ===
+res_df <- as.data.frame(res) %>%
+  rownames_to_column("ensembl") %>%
+  mutate(ensembl_clean = gsub("\\..*", "", ensembl)) %>%
+  mutate(symbol = mapIds(org.Hs.eg.db,
+                         keys = ensembl_clean,
+                         column = "SYMBOL",
+                         keytype = "ENSEMBL",
+                         multiVals = "first")) %>%
+  filter(!is.na(symbol), pvalue < 0.05)
+
+# === Subset to cytokine DEGs ===
+cytokine_DEGs <- res_df %>% filter(symbol %in% genes_cytokine)
+
+# === Subset rlog matrix ===
+rld_mat <- assay(rld)
+heat_mat <- rld_mat[rownames(rld_mat) %in% cytokine_DEGs$ensembl_clean, ]
+rownames(heat_mat) <- cytokine_DEGs$symbol[match(rownames(heat_mat), cytokine_DEGs$ensembl_clean)]
+
+# === Annotate columns ===
+col_ann <- data.frame(
+  treatment = case_when(
+    grepl("PSC_D_U", colnames(heat_mat)) ~ "DMSO_UNTREATED",
+    grepl("PSC_D_T", colnames(heat_mat)) ~ "DMSO_TGFB",
+    grepl("PSC_A_U", colnames(heat_mat)) ~ "ATRA_UNTREATED",
+    grepl("PSC_A_T", colnames(heat_mat)) ~ "ATRA_TGFB",
+    grepl("PSC_K_U", colnames(heat_mat)) ~ "KPT_UNTREATED",
+    grepl("PSC_K_T", colnames(heat_mat)) ~ "KPT_TGFB"
+  )
+)
+sample_numbers <- sub(".*_(U|T)([0-9]+)$", "\\2", colnames(heat_mat))
+treatment_labels <- col_ann$treatment
+new_colnames <- paste0(treatment_labels, "_", sample_numbers)
+colnames(heat_mat) <- new_colnames
+rownames(col_ann) <- new_colnames
+
+# === Reorder columns ===
+sample_order <- c("DMSO_UNTREATED", "DMSO_TGFB", "ATRA_UNTREATED", "ATRA_TGFB", "KPT_UNTREATED", "KPT_TGFB")
+ordered_cols <- unlist(lapply(sample_order, function(x) {
+  rownames(col_ann)[col_ann$treatment == x]
+}))
+heat_mat <- heat_mat[, ordered_cols]
+col_ann <- col_ann[ordered_cols, , drop = FALSE]
+
+# === Define annotation colors ===
+treatment_colors <- c(
+  "DMSO_UNTREATED" = "black",
+  "DMSO_TGFB" = "gray",
+  "ATRA_UNTREATED" = "red",
+  "ATRA_TGFB" = "pink",
+  "KPT_UNTREATED" = "blue",
+  "KPT_TGFB" = "lightblue"
+)
+
+# === Heatmap ===
+z_mat <- t(scale(t(heat_mat)))
+pheatmap(z_mat,
+         cluster_rows = TRUE,
+         cluster_cols = FALSE,
+         show_colnames = TRUE,
+         annotation_col = col_ann,
+         annotation_colors = list(treatment = treatment_colors),
+         main = "Cytokine Genes Z-score: Inhibitor Data")
+
+# === Cumulative z-score summary ===
+deg_cytokine <- cytokine_DEGs %>%
+  mutate(DEG_status = case_when(
+    log2FoldChange > 0 ~ "Upregulated",
+    log2FoldChange < 0 ~ "Downregulated",
+    TRUE ~ "Unchanged"
+  ))
+
+gene_info <- deg_cytokine[, c("symbol", "log2FoldChange")]
+heat_df <- as.data.frame(z_mat)
+heat_df$symbol <- rownames(z_mat)
+heat_df_joined <- inner_join(heat_df, gene_info, by = "symbol")
+
+heat_up <- heat_df_joined %>% filter(log2FoldChange > 0) %>% select(-log2FoldChange)
+heat_down <- heat_df_joined %>% filter(log2FoldChange < 0) %>% select(-log2FoldChange)
+
+z_up <- as.matrix(heat_up[, -which(names(heat_up) == "symbol")])
+z_down <- as.matrix(heat_down[, -which(names(heat_down) == "symbol")])
+
+zscore_summary <- data.frame(
+  Sample = rep(colnames(z_up), 2),
+  Zscore = c(colMeans(z_up, na.rm = TRUE), colMeans(z_down, na.rm = TRUE)),
+  Direction = rep(c("Cytokine-up", "Cytokine-down"), each = ncol(z_up))
+)
+
+zscore_summary$Treatment <- gsub("_[0-9]+", "", zscore_summary$Sample)
+zscore_summary$Sample <- factor(zscore_summary$Sample, levels = ordered_cols)
+
+# === Z-score bar plot ===
+ggplot(zscore_summary, aes(x = Sample, y = Zscore, fill = Direction)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  theme_minimal() +
+  labs(title = "Cumulative Z-Score of Cytokine Genes (Inhibitor-treated)",
+       y = "Average Z-Score", x = NULL) +
+  scale_fill_manual(values = c("Cytokine-up" = "firebrick", "Cytokine-down" = "steelblue")) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+# === Save results to Excel ===
+#write_xlsx(zscore_summary, path = "/Users/lindleyk/Desktop/inhibitor_final_cytokine_zscore.xlsx")
+
+```
+
+```{r, ecm}
+# === Load libraries ===
+library(DESeq2)
+library(dplyr)
+library(tibble)
+library(org.Hs.eg.db)
+library(pheatmap)
+library(ggplot2)
+library(writexl)
+library(readxl)
+
+# === Load DESeq2 objects ===
+dds <- readRDS("/Users/lindleyk/Langer/Bulk/deseq/inhibitors/dds_inhibitors.rds")
+res <- readRDS("/Users/lindleyk/Langer/Bulk/deseq/inhibitors/res_inhibitors.rds")
+rld <- readRDS("/Users/lindleyk/Langer/Bulk/deseq/inhibitors/rlog_inhibitors.rds")
+
+# === Load ECM gene list from Excel ===
+ecm_df <- read_xlsx("/Users/lindleyk/Desktop/naba_ecm_cytokine_overlaps.xlsx", sheet = "ECM_Overlap")
+genes_ecm <- unique(ecm_df$symbol)
+
+# === Process DESeq2 results: clean + map symbols ===
+res_df <- as.data.frame(res) %>%
+  rownames_to_column("ensembl") %>%
+  mutate(ensembl_clean = gsub("\\..*", "", ensembl)) %>%
+  mutate(symbol = mapIds(org.Hs.eg.db,
+                         keys = ensembl_clean,
+                         column = "SYMBOL",
+                         keytype = "ENSEMBL",
+                         multiVals = "first")) %>%
+  filter(!is.na(symbol), pvalue < 0.05)
+
+# === Filter for ECM DEGs ===
+ecm_DEGs <- res_df %>% filter(symbol %in% genes_ecm)
+
+# === Subset rlog matrix to ECM DEGs ===
+rld_mat <- assay(rld)
+heat_mat <- rld_mat[rownames(rld_mat) %in% ecm_DEGs$ensembl_clean, ]
+rownames(heat_mat) <- ecm_DEGs$symbol[match(rownames(heat_mat), ecm_DEGs$ensembl_clean)]
+
+# === Annotate samples ===
+col_ann <- data.frame(
+  treatment = case_when(
+    grepl("PSC_D_U", colnames(heat_mat)) ~ "DMSO_UNTREATED",
+    grepl("PSC_D_T", colnames(heat_mat)) ~ "DMSO_TGFB",
+    grepl("PSC_A_U", colnames(heat_mat)) ~ "ATRA_UNTREATED",
+    grepl("PSC_A_T", colnames(heat_mat)) ~ "ATRA_TGFB",
+    grepl("PSC_K_U", colnames(heat_mat)) ~ "KPT_UNTREATED",
+    grepl("PSC_K_T", colnames(heat_mat)) ~ "KPT_TGFB"
+  )
+)
+sample_numbers <- sub(".*_(U|T)([0-9]+)$", "\\2", colnames(heat_mat))
+treatment_labels <- col_ann$treatment
+new_colnames <- paste0(treatment_labels, "_", sample_numbers)
+colnames(heat_mat) <- new_colnames
+rownames(col_ann) <- new_colnames
+
+# === Reorder columns ===
+sample_order <- c("DMSO_UNTREATED", "DMSO_TGFB", "ATRA_UNTREATED", "ATRA_TGFB", "KPT_UNTREATED", "KPT_TGFB")
+ordered_cols <- unlist(lapply(sample_order, function(x) {
+  rownames(col_ann)[col_ann$treatment == x]
+}))
+heat_mat <- heat_mat[, ordered_cols]
+col_ann <- col_ann[ordered_cols, , drop = FALSE]
+
+# === Annotation colors ===
+treatment_colors <- c(
+  "DMSO_UNTREATED" = "black",
+  "DMSO_TGFB" = "gray",
+  "ATRA_UNTREATED" = "red",
+  "ATRA_TGFB" = "pink",
+  "KPT_UNTREATED" = "blue",
+  "KPT_TGFB" = "lightblue"
+)
+
+# === Heatmap ===
+z_mat <- t(scale(t(heat_mat)))
+pheatmap(z_mat,
+         cluster_rows = TRUE,
+         cluster_cols = FALSE,
+         show_colnames = TRUE,
+         annotation_col = col_ann,
+         annotation_colors = list(treatment = treatment_colors),
+         main = "ECM Genes Z-score: Inhibitor Study")
+
+# === Cumulative z-score summary ===
+deg_ecm <- ecm_DEGs %>%
+  mutate(DEG_status = case_when(
+    log2FoldChange > 0 ~ "Upregulated",
+    log2FoldChange < 0 ~ "Downregulated",
+    TRUE ~ "Unchanged"
+  ))
+
+gene_info <- deg_ecm[, c("symbol", "log2FoldChange")]
+heat_df <- as.data.frame(z_mat)
+heat_df$symbol <- rownames(z_mat)
+heat_df_joined <- inner_join(heat_df, gene_info, by = "symbol")
+
+heat_up <- heat_df_joined %>% filter(log2FoldChange > 0) %>% select(-log2FoldChange)
+heat_down <- heat_df_joined %>% filter(log2FoldChange < 0) %>% select(-log2FoldChange)
+
+z_up <- as.matrix(heat_up[, -which(names(heat_up) == "symbol")])
+z_down <- as.matrix(heat_down[, -which(names(heat_down) == "symbol")])
+
+zscore_summary <- data.frame(
+  Sample = rep(colnames(z_up), 2),
+  Zscore = c(colMeans(z_up, na.rm = TRUE), colMeans(z_down, na.rm = TRUE)),
+  Direction = rep(c("ECM-up", "ECM-down"), each = ncol(z_up))
+)
+
+zscore_summary$Treatment <- gsub("_[0-9]+", "", zscore_summary$Sample)
+zscore_summary$Sample <- factor(zscore_summary$Sample, levels = ordered_cols)
+
+# === Z-score bar plot ===
+ggplot(zscore_summary, aes(x = Sample, y = Zscore, fill = Direction)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  theme_minimal() +
+  labs(title = "Cumulative Z-Score of ECM Genes (Inhibitor-treated)",
+       y = "Average Z-Score", x = NULL) +
+  scale_fill_manual(values = c("ECM-up" = "firebrick", "ECM-down" = "steelblue")) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+# === Save to Excel ===
+write_xlsx(zscore_summary, path = "/Users/lindleyk/Desktop/inhibitor_ecm_zscore.xlsx")
+table(ecm_DEGs$)
+```
+
+```{r, matrisome inhibitors}
+# === Load libraries ===
+library(DESeq2)
+library(dplyr)
+library(tibble)
+library(org.Hs.eg.db)
+library(pheatmap)
+library(ggplot2)
+library(writexl)
+library(readxl)
+
+# === Load DESeq2 objects ===
+dds <- readRDS("/Users/lindleyk/Langer/Bulk/deseq/inhibitors/dds_inhibitors.rds")
+res <- readRDS("/Users/lindleyk/Langer/Bulk/deseq/inhibitors/res_inhibitors.rds")
+rld <- readRDS("/Users/lindleyk/Langer/Bulk/deseq/inhibitors/rlog_inhibitors.rds")
+
+# === Load NABA matrisome gene list from Excel ===
+matrisome_df <- read_xlsx("/Users/lindleyk/Desktop/naba_ecm_cytokine_overlaps.xlsx", sheet = "NABA_MATRISOME_Overlap")
+genes_matrisome <- unique(matrisome_df$symbol)
+
+# === Process DESeq2 results: clean + map symbols ===
+res_df <- as.data.frame(res) %>%
+  rownames_to_column("ensembl") %>%
+  mutate(ensembl_clean = gsub("\\..*", "", ensembl)) %>%
+  mutate(symbol = mapIds(org.Hs.eg.db,
+                         keys = ensembl_clean,
+                         column = "SYMBOL",
+                         keytype = "ENSEMBL",
+                         multiVals = "first")) %>%
+  filter(!is.na(symbol), padj < 0.05)
+
+# === Filter for NABA matrisome DEGs ===
+matrisome_DEGs <- res_df %>% filter(symbol %in% genes_matrisome)
+
+# === Subset rlog matrix and apply gene symbol rownames ===
+rld_mat <- assay(rld)
+heat_mat <- rld_mat[rownames(rld_mat) %in% matrisome_DEGs$ensembl_clean, ]
+rownames(heat_mat) <- matrisome_DEGs$symbol[match(rownames(heat_mat), matrisome_DEGs$ensembl_clean)]
+
+# === Annotate samples by treatment group ===
+col_ann <- data.frame(
+  treatment = case_when(
+    grepl("PSC_D_U", colnames(heat_mat)) ~ "DMSO_UNTREATED",
+    grepl("PSC_D_T", colnames(heat_mat)) ~ "DMSO_TGFB",
+    grepl("PSC_A_U", colnames(heat_mat)) ~ "ATRA_UNTREATED",
+    grepl("PSC_A_T", colnames(heat_mat)) ~ "ATRA_TGFB",
+    grepl("PSC_K_U", colnames(heat_mat)) ~ "KPT_UNTREATED",
+    grepl("PSC_K_T", colnames(heat_mat)) ~ "KPT_TGFB"
+  )
+)
+sample_numbers <- sub(".*_(U|T)([0-9]+)$", "\\2", colnames(heat_mat))
+treatment_labels <- col_ann$treatment
+new_colnames <- paste0(treatment_labels, "_", sample_numbers)
+colnames(heat_mat) <- new_colnames
+rownames(col_ann) <- new_colnames
+
+# === Reorder columns ===
+sample_order <- c("DMSO_UNTREATED", "DMSO_TGFB", "ATRA_UNTREATED", "ATRA_TGFB", "KPT_UNTREATED", "KPT_TGFB")
+ordered_cols <- unlist(lapply(sample_order, function(x) {
+  rownames(col_ann)[col_ann$treatment == x]
+}))
+heat_mat <- heat_mat[, ordered_cols]
+col_ann <- col_ann[ordered_cols, , drop = FALSE]
+
+# === Define annotation colors ===
+treatment_colors <- c(
+  "DMSO_UNTREATED" = "black",
+  "DMSO_TGFB" = "gray",
+  "ATRA_UNTREATED" = "red",
+  "ATRA_TGFB" = "pink",
+  "KPT_UNTREATED" = "blue",
+  "KPT_TGFB" = "lightblue"
+)
+
+# === Heatmap ===
+z_mat <- t(scale(t(heat_mat)))
+pheatmap(z_mat,
+         cluster_rows = TRUE,
+         cluster_cols = FALSE,
+         show_colnames = TRUE,
+         show_rownames = FALSE,
+         annotation_col = col_ann,
+         annotation_colors = list(treatment = treatment_colors),
+         main = "NABA Matrisome Genes Z-score: Inhibitor Study")
+
+# === Cumulative z-score summary ===
+deg_matrisome <- matrisome_DEGs %>%
+  mutate(DEG_status = case_when(
+    log2FoldChange > 0 ~ "Upregulated",
+    log2FoldChange < 0 ~ "Downregulated",
+    TRUE ~ "Unchanged"
+  ))
+
+gene_info <- deg_matrisome[, c("symbol", "log2FoldChange")]
+heat_df <- as.data.frame(z_mat)
+heat_df$symbol <- rownames(z_mat)
+heat_df_joined <- inner_join(heat_df, gene_info, by = "symbol")
+
+heat_up <- heat_df_joined %>% filter(log2FoldChange > 0) %>% select(-log2FoldChange)
+heat_down <- heat_df_joined %>% filter(log2FoldChange < 0) %>% select(-log2FoldChange)
+
+z_up <- as.matrix(heat_up[, -which(names(heat_up) == "symbol")])
+z_down <- as.matrix(heat_down[, -which(names(heat_down) == "symbol")])
+
+zscore_summary <- data.frame(
+  Sample = rep(colnames(z_up), 2),
+  Zscore = c(colMeans(z_up, na.rm = TRUE), colMeans(z_down, na.rm = TRUE)),
+  Direction = rep(c("Matrisome-up", "Matrisome-down"), each = ncol(z_up))
+)
+
+zscore_summary$Treatment <- gsub("_[0-9]+", "", zscore_summary$Sample)
+zscore_summary$Sample <- factor(zscore_summary$Sample, levels = ordered_cols)
+
+# === Z-score bar plot ===
+ggplot(zscore_summary, aes(x = Sample, y = Zscore, fill = Direction)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  theme_minimal() +
+  labs(title = "Cumulative Z-Score of NABA Matrisome Genes (Inhibitor-treated)",
+       y = "Average Z-Score", x = NULL) +
+  scale_fill_manual(values = c("Matrisome-up" = "firebrick", "Matrisome-down" = "steelblue")) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+# === Save to Excel ===
+write_xlsx(zscore_summary, path = "/Users/lindleyk/Desktop/inhibitor_final_matrisome_zscore.xlsx")
+
+```
+
